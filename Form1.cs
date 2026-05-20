@@ -12,7 +12,7 @@ namespace DragUploadToNas
     public class MainForm : Form
     {
         // 固定配置（写在代码里）
-        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/上传的文件/";
+        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/uploads/";
         private static readonly string UserName = "user";
         private static readonly string Pwd = "Cc880821/";
 
