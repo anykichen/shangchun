@@ -11,7 +11,7 @@ namespace DragUploadToNas
 {
     public class MainForm : Form
     {
-        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/uploads/";
+        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/tpk%20%E5%85%B1%E4%BA%AB%E7%BB%99%E6%88%91/";
         private static readonly string UserName = "user";
         private static readonly string Pwd = "Cc880821/";
 
