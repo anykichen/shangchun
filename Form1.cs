@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -11,262 +12,197 @@ namespace DragUploadToNas
 {
     public class MainForm : Form
     {
-        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/uploads/";
-        private static readonly string UserName = "tpk";
+        private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/tpk%20%E5%85%B1%E4%BA%AB%E7%BB%99%E6%88%91/";
+        private static readonly string UserName = "user";
         private static readonly string Pwd = "Cc880821/";
 
-        private ListView lstFiles;
-        private Label lblDropHint;
-        private ProgressBar progressBar;
-        private Label lblStatus;
-
-        private int _successCount, _skipCount, _failCount;
-        private CancellationTokenSource _cts;
+        private NotifyIcon _tray;
         private bool _isUploading;
+        private bool _isDragOver;
 
         public MainForm()
         {
-            InitializeComponent();
+            InitUI();
+            InitTray();
         }
 
-        private void InitializeComponent()
+        private void InitUI()
         {
-            this.Text = "DragUploadToNas";
-            this.Size = new Size(550, 450);
+            this.Text = "上传到 NAS";
+            this.Size = new Size(160, 160);
+            this.MinimumSize = this.MaximumSize = this.Size;
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.MinimumSize = new Size(400, 300);
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+            this.TopMost = true;
             this.AllowDrop = true;
-            this.DragEnter += MainForm_DragEnter;
-            this.DragOver += MainForm_DragOver;
-            this.DragDrop += MainForm_DragDrop;
-            this.BackColor = Color.FromArgb(32, 32, 32);
+            this.DoubleBuffered = true;
 
-            lblDropHint = new Label
+            this.Paint += OnPaint;
+            this.DragEnter += (s, e) =>
             {
-                Text = "将文件或文件夹拖拽到此处\n\n松开即开始上传",
-                TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Fill,
-                ForeColor = Color.FromArgb(100, 100, 100),
-                Font = new Font("Segoe UI", 16)
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    e.Effect = DragDropEffects.Copy;
+                    _isDragOver = true;
+                    Invalidate();
+                }
             };
-            this.Controls.Add(lblDropHint);
+            this.DragLeave += (s, e) => { _isDragOver = false; Invalidate(); };
+            this.DragDrop += OnDrop;
 
-            lstFiles = new ListView
-            {
-                View = View.Details,
-                FullRowSelect = true,
-                GridLines = true,
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10),
-                Visible = false
-            };
-            lstFiles.Columns.Add("文件名", 280);
-            lstFiles.Columns.Add("大小", 70);
-            lstFiles.Columns.Add("状态", 180);
-            this.Controls.Add(lstFiles);
+            var ctx = new ContextMenuStrip();
+            ctx.Items.Add("退出", null, (s, e) => Application.Exit());
+            this.ContextMenuStrip = ctx;
 
-            var statusPanel = new Panel
-            {
-                Dock = DockStyle.Bottom,
-                Height = 36,
-                BackColor = Color.FromArgb(48, 48, 48)
+            this.MouseDown += (s, e) => {
+                if (e.Button == MouseButtons.Left)
+                {
+                    NativeMethods.ReleaseCapture();
+                    NativeMethods.SendMessage(this.Handle, 0xA1, 2, 0);
+                }
             };
-            this.Controls.Add(statusPanel);
-
-            progressBar = new ProgressBar
-            {
-                Location = new Point(10, 8),
-                Size = new Size(400, 20),
-                Style = ProgressBarStyle.Continuous,
-                ForeColor = Color.FromArgb(0, 120, 215)
-            };
-            statusPanel.Controls.Add(progressBar);
-
-            lblStatus = new Label
-            {
-                Text = "就绪",
-                Location = new Point(420, 10),
-                AutoSize = true,
-                ForeColor = Color.FromArgb(180, 180, 180),
-                Font = new Font("Segoe UI", 9)
-            };
-            statusPanel.Controls.Add(lblStatus);
         }
 
-        private void MainForm_DragEnter(object sender, DragEventArgs e)
+        private void OnPaint(object sender, PaintEventArgs e)
         {
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            int w = this.Width, h = this.Height;
+            bool hover = _isDragOver;
+            bool busy  = _isUploading;
+
+            Color bodyColor = busy  ? Color.FromArgb(255, 180, 60)
+                            : hover ? Color.FromArgb(255, 210, 80)
+                            :         Color.FromArgb(255, 196, 57);
+            Color tabColor  = busy  ? Color.FromArgb(230, 150, 30)
+                            : hover ? Color.FromArgb(240, 185, 50)
+                            :         Color.FromArgb(230, 168, 30);
+
+            // 阴影
+            using (var sb = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
+                g.FillEllipse(sb, 10, h - 22, w - 20, 16);
+
+            // 标签
+            var tab = new[] {
+                new PointF(18, 30), new PointF(62, 30),
+                new PointF(72, 42), new PointF(18, 42)
+            };
+            using (var sb = new SolidBrush(tabColor))
+                g.FillPolygon(sb, tab);
+
+            // 主体
+            var body = RoundedRect(new Rectangle(10, 40, w - 20, h - 60), 10);
+            using (var sb = new SolidBrush(bodyColor))
+                g.FillPath(sb, body);
+
+            // 高光
+            using (var lg = new LinearGradientBrush(
+                new PointF(10, 40), new PointF(10, 40 + (h - 60) * 0.5f),
+                Color.FromArgb(80, 255, 255, 255), Color.Transparent))
             {
-                e.Effect = DragDropEffects.Copy;
-                lblDropHint.ForeColor = Color.FromArgb(180, 180, 180);
+                var top = RoundedRect(new Rectangle(10, 40, w - 20, (h - 60) / 2), 10);
+                g.FillPath(lg, top);
+            }
+
+            // 状态文字/图标
+            var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            var rect = new RectangleF(10, 48, w - 20, h - 65);
+
+            if (busy)
+            {
+                using (var f = new Font("Segoe UI", 9, FontStyle.Bold))
+                using (var sb = new SolidBrush(Color.FromArgb(160, 80, 0)))
+                    g.DrawString("上传中...", f, sb, rect, sf);
+            }
+            else if (hover)
+            {
+                using (var f = new Font("Segoe UI", 24))
+                using (var sb = new SolidBrush(Color.FromArgb(160, 80, 40, 0)))
+                    g.DrawString("↓", f, sb, rect, sf);
+            }
+            else
+            {
+                using (var p = new Pen(Color.FromArgb(80, 160, 100, 0), 2))
+                {
+                    int cx = w / 2, cy = h / 2 + 5;
+                    g.DrawLine(p, cx - 20, cy - 8, cx + 20, cy - 8);
+                    g.DrawLine(p, cx - 20, cy,     cx + 20, cy);
+                    g.DrawLine(p, cx - 20, cy + 8, cx + 14, cy + 8);
+                }
             }
         }
 
-        private void MainForm_DragOver(object sender, DragEventArgs e)
+        private void OnDrop(object sender, DragEventArgs e)
         {
-            e.Effect = DragDropEffects.Copy;
-        }
+            _isDragOver = false;
+            Invalidate();
 
-        private void MainForm_DragDrop(object sender, DragEventArgs e)
-        {
-            lblDropHint.ForeColor = Color.FromArgb(100, 100, 100);
-            string[] paths = (string[])e.Data.GetData(DataFormats.FileDrop);
-            StartUpload(paths);
-        }
+            if (_isUploading) { Notify("正在上传中，请稍候..."); return; }
 
-        private void StartUpload(string[] paths)
-        {
-            if (_isUploading) return;
-
+            var paths = (string[])e.Data.GetData(DataFormats.FileDrop);
             var files = paths.SelectMany(p =>
-                File.Exists(p) ? new[] { p } :
+                File.Exists(p)      ? new[] { p } :
                 Directory.Exists(p) ? Directory.EnumerateFiles(p, "*", SearchOption.AllDirectories) :
                 Array.Empty<string>()
             ).ToList();
 
             if (files.Count == 0) return;
 
-            lstFiles.Visible = true;
-            lblDropHint.Visible = false;
-            lstFiles.Items.Clear();
-            _successCount = _skipCount = _failCount = 0;
-
-            foreach (var f in files)
-            {
-                var fi = new FileInfo(f);
-                var item = new ListViewItem(Path.GetFileName(f));
-                item.SubItems.Add(FormatSize(fi.Length));
-                item.SubItems.Add("等待");
-                lstFiles.Items.Add(item);
-            }
-
-            lblStatus.Text = $"共 {files.Count} 个文件，开始上传...";
+            Notify($"开始上传 {files.Count} 个文件...");
             _isUploading = true;
-            _cts = new CancellationTokenSource();
-            Task.Run(() => DoUpload(files, _cts.Token));
-        }
+            Invalidate();
 
-        private async Task DoUpload(System.Collections.Generic.List<string> files, CancellationToken ct)
-        {
-            int success = 0, skip = 0, fail = 0;
-
-            for (int i = 0; i < files.Count; i++)
+            Task.Run(async () =>
             {
-                if (ct.IsCancellationRequested) break;
+                int ok = 0, skip = 0, fail = 0;
 
-                var localPath = files[i];
-                var fileName = Path.GetFileName(localPath);
-                var fileInfo = new FileInfo(localPath);
-                var remoteUrl = NasWebDavUrl + Uri.EscapeDataString(fileName);
-
-                int capturedI = i;
-                BeginInvoke(new Action(() =>
+                for (int i = 0; i < files.Count; i++)
                 {
-                    lblStatus.Text = $"[{capturedI + 1}/{files.Count}] {fileName}";
-                    progressBar.Value = (capturedI + 1) * 100 / files.Count;
-                    if (capturedI < lstFiles.Items.Count)
+                    var localPath = files[i];
+                    var fileName  = Path.GetFileName(localPath);
+                    var remoteUrl = NasWebDavUrl + Uri.EscapeDataString(fileName);
+                    var fileInfo  = new FileInfo(localPath);
+
+                    if (i == 0 || (i + 1) % 10 == 0 || i == files.Count - 1)
+                        Notify($"[{i + 1}/{files.Count}] {fileName}");
+
+                    for (int attempt = 1; attempt <= 3; attempt++)
                     {
-                        lstFiles.Items[capturedI].SubItems[2].Text = "上传中";
-                        lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Orange;
-                    }
-                }));
-
-                bool done = false;
-
-                for (int attempt = 1; attempt <= 3; attempt++)
-                {
-                    if (ct.IsCancellationRequested) break;
-
-                    try
-                    {
-                        if (await RemoteFileExistsAsync(remoteUrl))
+                        try
                         {
-                            BeginInvoke(new Action(() =>
-                            {
-                                if (capturedI < lstFiles.Items.Count)
-                                {
-                                    lstFiles.Items[capturedI].SubItems[2].Text = "已存在(跳过)";
-                                    lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Gray;
-                                }
-                            }));
-                            skip++;
-                            done = true;
-                            break;
+                            if (await RemoteFileExistsAsync(remoteUrl))
+                            { skip++; break; }
+
+                            await UploadFileAsync(localPath, remoteUrl, fileInfo.Length);
+                            ok++; break;
                         }
-
-                        await UploadFileAsync(localPath, remoteUrl, fileInfo.Length, ct);
-
-                        BeginInvoke(new Action(() =>
+                        catch (Exception ex)
                         {
-                            if (capturedI < lstFiles.Items.Count)
+                            string err = ex is WebException we && we.Response is HttpWebResponse wr
+                                ? $"HTTP {(int)wr.StatusCode}"
+                                : ex.Message;
+
+                            if (attempt == 3)
                             {
-                                lstFiles.Items[capturedI].SubItems[2].Text = "完成";
-                                lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Lime;
+                                fail++;
+                                Notify($"失败: {fileName}\n{err}", ToolTipIcon.Error);
                             }
-                        }));
-                        success++;
-                        done = true;
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        // 提取具体错误信息
-                        string errMsg = ex.Message;
-                        if (ex is WebException we)
-                        {
-                            if (we.Response is HttpWebResponse wr)
-                                errMsg = $"HTTP {(int)wr.StatusCode} {wr.StatusDescription}";
-                            else if (we.Status == WebExceptionStatus.ConnectFailure)
-                                errMsg = "连接失败，NAS 不可达";
-                            else if (we.Status == WebExceptionStatus.Timeout)
-                                errMsg = "连接超时";
-                            else
-                                errMsg = $"网络错误: {we.Status}";
-                        }
-
-                        if (attempt < 3)
-                        {
-                            string retryMsg = errMsg;
-                            int retryI = capturedI;
-                            BeginInvoke(new Action(() =>
-                            {
-                                if (retryI < lstFiles.Items.Count)
-                                {
-                                    lstFiles.Items[retryI].SubItems[2].Text = $"重试{attempt}({retryMsg})";
-                                    lstFiles.Items[retryI].SubItems[2].ForeColor = Color.Yellow;
-                                }
-                            }));
-                            await Task.Delay(1500, ct);
-                        }
-                        else
-                        {
-                            string finalErr = errMsg;
-                            int finalI = capturedI;
-                            BeginInvoke(new Action(() =>
-                            {
-                                if (finalI < lstFiles.Items.Count)
-                                {
-                                    lstFiles.Items[finalI].SubItems[2].Text = $"失败: {finalErr}";
-                                    lstFiles.Items[finalI].SubItems[2].ForeColor = Color.Red;
-                                }
-                            }));
-                            fail++;
+                            else await Task.Delay(1500);
                         }
                     }
                 }
-            }
 
-            int s = success, sk = skip, f = fail;
-            BeginInvoke(new Action(() =>
-            {
-                _isUploading = false;
-                progressBar.Value = 100;
-                lblStatus.Text = $"完成 成功:{s} 跳过:{sk} 失败:{f}";
-                MessageBox.Show($"上传完成\n成功:{s}  跳过:{sk}  失败:{f}", "完成",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }));
+                this.Invoke(new Action(() => {
+                    _isUploading = false;
+                    Invalidate();
+                }));
+
+                Notify($"完成  ✓{ok}  跳过{skip}  ✗{fail}",
+                    fail > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            });
         }
 
         private async Task<bool> RemoteFileExistsAsync(string url)
@@ -277,20 +213,17 @@ namespace DragUploadToNas
                 req.Method = "HEAD";
                 req.Credentials = new NetworkCredential(UserName, Pwd);
                 req.Timeout = 8000;
-                using (var resp = await req.GetResponseAsync())
-                    return true;
+                using (await req.GetResponseAsync()) return true;
             }
             catch (WebException ex) when (ex.Response is HttpWebResponse r && r.StatusCode == HttpStatusCode.NotFound)
-            {
-                return false;
-            }
+            { return false; }
             catch { return false; }
         }
 
-        private async Task UploadFileAsync(string localPath, string remoteUrl, long fileSize, CancellationToken ct)
+        private async Task UploadFileAsync(string localPath, string remoteUrl, long fileSize)
         {
             const int BufSize = 256 * 1024;
-            byte[] buf = new byte[BufSize];
+            var buf = new byte[BufSize];
 
             var req = WebRequest.CreateHttp(remoteUrl);
             req.Method = "PUT";
@@ -298,33 +231,74 @@ namespace DragUploadToNas
             req.ContentLength = fileSize;
             req.Timeout = 120_000;
             req.ReadWriteTimeout = 300_000;
-            req.PreAuthenticate = true; // 直接发认证头，避免 401 往返
+            req.PreAuthenticate = true;
 
             using (var fs = new FileStream(localPath, FileMode.Open, FileAccess.Read))
-            using (var rs = await Task.Run(() => req.GetRequestStream(), ct))
+            using (var rs = await Task.Run(() => req.GetRequestStream()))
             {
                 int read;
-                while ((read = await fs.ReadAsync(buf, 0, BufSize, ct)) > 0)
-                {
-                    if (ct.IsCancellationRequested) break;
-                    await rs.WriteAsync(buf, 0, read, ct);
-                }
+                while ((read = await fs.ReadAsync(buf, 0, BufSize)) > 0)
+                    await rs.WriteAsync(buf, 0, read);
             }
 
-            using (var resp = (HttpWebResponse)await Task.Run(() => req.GetResponse(), ct))
+            using (var resp = (HttpWebResponse)await Task.Run(() => req.GetResponse()))
             {
                 var sc = resp.StatusCode;
                 if (sc != HttpStatusCode.Created && sc != HttpStatusCode.NoContent && sc != HttpStatusCode.OK)
-                    throw new Exception($"服务器返回: {(int)sc} {sc}");
+                    throw new Exception($"服务器返回 {(int)sc}");
             }
         }
 
-        private string FormatSize(long bytes)
+        private void InitTray()
         {
-            if (bytes < 1024) return $"{bytes} B";
-            if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
-            if (bytes < 1024L * 1024 * 1024) return $"{bytes / 1024.0 / 1024:F1} MB";
-            return $"{bytes / 1024.0 / 1024 / 1024:F2} GB";
+            _tray = new NotifyIcon
+            {
+                Icon    = SystemIcons.Application,
+                Visible = true,
+                Text    = "NAS 上传"
+            };
+            var ctx = new ContextMenuStrip();
+            ctx.Items.Add("退出", null, (s, e) => Application.Exit());
+            _tray.ContextMenuStrip = ctx;
+            _tray.DoubleClick += (s, e) => { this.Show(); this.BringToFront(); };
+
+            this.FormClosing += (s, e) =>
+            {
+                if (e.CloseReason == CloseReason.UserClosing)
+                { e.Cancel = true; this.Hide(); }
+            };
         }
+
+        private void Notify(string msg, ToolTipIcon icon = ToolTipIcon.Info)
+        {
+            try { _tray?.ShowBalloonTip(2500, "NAS 上传", msg, icon); }
+            catch { }
+        }
+
+        protected override void Dispose(bool d)
+        {
+            if (d) _tray?.Dispose();
+            base.Dispose(d);
+        }
+
+        private static GraphicsPath RoundedRect(Rectangle r, int radius)
+        {
+            var path = new GraphicsPath();
+            int d = radius * 2;
+            path.AddArc(r.X, r.Y, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+    }
+
+    internal static class NativeMethods
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
     }
 }
