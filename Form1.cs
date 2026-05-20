@@ -11,20 +11,15 @@ namespace DragUploadToNas
 {
     public class MainForm : Form
     {
-        // 固定配置（写在代码里）
         private static readonly string NasWebDavUrl = "http://10.201.2.31:5005/uploads/";
         private static readonly string UserName = "user";
         private static readonly string Pwd = "Cc880821/";
 
-        // 拖拽区域
         private ListView lstFiles;
         private Label lblDropHint;
-
-        // 状态栏
         private ProgressBar progressBar;
         private Label lblStatus;
 
-        // 上传
         private int _successCount, _skipCount, _failCount;
         private CancellationTokenSource _cts;
         private bool _isUploading;
@@ -46,7 +41,6 @@ namespace DragUploadToNas
             this.DragDrop += MainForm_DragDrop;
             this.BackColor = Color.FromArgb(32, 32, 32);
 
-            // 拖拽提示（覆盖在窗口上，空时显示）
             lblDropHint = new Label
             {
                 Text = "将文件或文件夹拖拽到此处\n\n松开即开始上传",
@@ -57,7 +51,6 @@ namespace DragUploadToNas
             };
             this.Controls.Add(lblDropHint);
 
-            // 文件列表
             lstFiles = new ListView
             {
                 View = View.Details,
@@ -71,10 +64,9 @@ namespace DragUploadToNas
             };
             lstFiles.Columns.Add("文件名", 280);
             lstFiles.Columns.Add("大小", 70);
-            lstFiles.Columns.Add("状态", 100);
+            lstFiles.Columns.Add("状态", 180);
             this.Controls.Add(lstFiles);
 
-            // 状态栏
             var statusPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
@@ -108,7 +100,6 @@ namespace DragUploadToNas
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 e.Effect = DragDropEffects.Copy;
-                lblDropHint.BackColor = Color.FromArgb(0, 120, 215, 40);
                 lblDropHint.ForeColor = Color.FromArgb(180, 180, 180);
             }
         }
@@ -120,9 +111,7 @@ namespace DragUploadToNas
 
         private void MainForm_DragDrop(object sender, DragEventArgs e)
         {
-            lblDropHint.BackColor = Color.Transparent;
             lblDropHint.ForeColor = Color.FromArgb(100, 100, 100);
-
             string[] paths = (string[])e.Data.GetData(DataFormats.FileDrop);
             StartUpload(paths);
         }
@@ -131,7 +120,6 @@ namespace DragUploadToNas
         {
             if (_isUploading) return;
 
-            // 展开所有文件
             var files = paths.SelectMany(p =>
                 File.Exists(p) ? new[] { p } :
                 Directory.Exists(p) ? Directory.EnumerateFiles(p, "*", SearchOption.AllDirectories) :
@@ -140,7 +128,6 @@ namespace DragUploadToNas
 
             if (files.Count == 0) return;
 
-            // 显示文件列表
             lstFiles.Visible = true;
             lblDropHint.Visible = false;
             lstFiles.Items.Clear();
@@ -152,12 +139,10 @@ namespace DragUploadToNas
                 var item = new ListViewItem(Path.GetFileName(f));
                 item.SubItems.Add(FormatSize(fi.Length));
                 item.SubItems.Add("等待");
-                item.SubItems[2].ForeColor = Color.Gray;
                 lstFiles.Items.Add(item);
             }
 
             lblStatus.Text = $"共 {files.Count} 个文件，开始上传...";
-
             _isUploading = true;
             _cts = new CancellationTokenSource();
             Task.Run(() => DoUpload(files, _cts.Token));
@@ -176,18 +161,19 @@ namespace DragUploadToNas
                 var fileInfo = new FileInfo(localPath);
                 var remoteUrl = NasWebDavUrl + Uri.EscapeDataString(fileName);
 
+                int capturedI = i;
                 BeginInvoke(new Action(() =>
                 {
-                    lblStatus.Text = $"[{i + 1}/{files.Count}] {fileName}";
-                    progressBar.Value = (i + 1) * 100 / files.Count;
-                    if (i < lstFiles.Items.Count)
+                    lblStatus.Text = $"[{capturedI + 1}/{files.Count}] {fileName}";
+                    progressBar.Value = (capturedI + 1) * 100 / files.Count;
+                    if (capturedI < lstFiles.Items.Count)
                     {
-                        lstFiles.Items[i].SubItems[2].Text = "上传中";
-                        lstFiles.Items[i].SubItems[2].ForeColor = Color.Orange;
+                        lstFiles.Items[capturedI].SubItems[2].Text = "上传中";
+                        lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Orange;
                     }
                 }));
 
-                bool uploaded = false;
+                bool done = false;
 
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
@@ -199,44 +185,71 @@ namespace DragUploadToNas
                         {
                             BeginInvoke(new Action(() =>
                             {
-                                if (i < lstFiles.Items.Count)
+                                if (capturedI < lstFiles.Items.Count)
                                 {
-                                    lstFiles.Items[i].SubItems[2].Text = "已存在";
-                                    lstFiles.Items[i].SubItems[2].ForeColor = Color.Gray;
+                                    lstFiles.Items[capturedI].SubItems[2].Text = "已存在(跳过)";
+                                    lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Gray;
                                 }
                             }));
                             skip++;
-                            uploaded = true;
+                            done = true;
                             break;
                         }
 
                         await UploadFileAsync(localPath, remoteUrl, fileInfo.Length, ct);
+
                         BeginInvoke(new Action(() =>
                         {
-                            if (i < lstFiles.Items.Count)
+                            if (capturedI < lstFiles.Items.Count)
                             {
-                                lstFiles.Items[i].SubItems[2].Text = "完成";
-                                lstFiles.Items[i].SubItems[2].ForeColor = Color.Lime;
+                                lstFiles.Items[capturedI].SubItems[2].Text = "完成";
+                                lstFiles.Items[capturedI].SubItems[2].ForeColor = Color.Lime;
                             }
                         }));
                         success++;
-                        uploaded = true;
+                        done = true;
                         break;
                     }
                     catch (Exception ex)
                     {
+                        // 提取具体错误信息
+                        string errMsg = ex.Message;
+                        if (ex is WebException we)
+                        {
+                            if (we.Response is HttpWebResponse wr)
+                                errMsg = $"HTTP {(int)wr.StatusCode} {wr.StatusDescription}";
+                            else if (we.Status == WebExceptionStatus.ConnectFailure)
+                                errMsg = "连接失败，NAS 不可达";
+                            else if (we.Status == WebExceptionStatus.Timeout)
+                                errMsg = "连接超时";
+                            else
+                                errMsg = $"网络错误: {we.Status}";
+                        }
+
                         if (attempt < 3)
                         {
+                            string retryMsg = errMsg;
+                            int retryI = capturedI;
+                            BeginInvoke(new Action(() =>
+                            {
+                                if (retryI < lstFiles.Items.Count)
+                                {
+                                    lstFiles.Items[retryI].SubItems[2].Text = $"重试{attempt}({retryMsg})";
+                                    lstFiles.Items[retryI].SubItems[2].ForeColor = Color.Yellow;
+                                }
+                            }));
                             await Task.Delay(1500, ct);
                         }
                         else
                         {
+                            string finalErr = errMsg;
+                            int finalI = capturedI;
                             BeginInvoke(new Action(() =>
                             {
-                                if (i < lstFiles.Items.Count)
+                                if (finalI < lstFiles.Items.Count)
                                 {
-                                    lstFiles.Items[i].SubItems[2].Text = "失败";
-                                    lstFiles.Items[i].SubItems[2].ForeColor = Color.Red;
+                                    lstFiles.Items[finalI].SubItems[2].Text = $"失败: {finalErr}";
+                                    lstFiles.Items[finalI].SubItems[2].ForeColor = Color.Red;
                                 }
                             }));
                             fail++;
@@ -245,12 +258,13 @@ namespace DragUploadToNas
                 }
             }
 
+            int s = success, sk = skip, f = fail;
             BeginInvoke(new Action(() =>
             {
                 _isUploading = false;
                 progressBar.Value = 100;
-                lblStatus.Text = $"完成 成功:{success} 跳过:{skip} 失败:{fail}";
-                MessageBox.Show($"上传完成\n成功:{success}  跳过:{skip}  失败:{fail}", "完成",
+                lblStatus.Text = $"完成 成功:{s} 跳过:{sk} 失败:{f}";
+                MessageBox.Show($"上传完成\n成功:{s}  跳过:{sk}  失败:{f}", "完成",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }));
         }
@@ -284,6 +298,7 @@ namespace DragUploadToNas
             req.ContentLength = fileSize;
             req.Timeout = 120_000;
             req.ReadWriteTimeout = 300_000;
+            req.PreAuthenticate = true; // 直接发认证头，避免 401 往返
 
             using (var fs = new FileStream(localPath, FileMode.Open, FileAccess.Read))
             using (var rs = await Task.Run(() => req.GetRequestStream(), ct))
@@ -300,7 +315,7 @@ namespace DragUploadToNas
             {
                 var sc = resp.StatusCode;
                 if (sc != HttpStatusCode.Created && sc != HttpStatusCode.NoContent && sc != HttpStatusCode.OK)
-                    throw new Exception($"服务器返回: {sc}");
+                    throw new Exception($"服务器返回: {(int)sc} {sc}");
             }
         }
 
